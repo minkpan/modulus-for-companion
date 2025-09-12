@@ -1,0 +1,37 @@
+/* LIGHT THEME */
+.root { -fx-base: #ffffff; -fx-background: #ffffff; -fx-text-fill: #111; }
+
+.label, .table-view, .combo-box, .menu-bar, .menu, .menu-button, .button {
+  -fx-text-fill: #111;
+}
+
+/* Table text (cells + headers) */
+.table-view .table-cell { -fx-text-fill: #111; }
+.table-view .column-header .label { -fx-text-fill: #111; }
+
+/* Selected row */
+.table-row-cell:selected { -fx-background-color: #cde3ff; }
+
+/* Module dropdown: add a subtle border like other controls */
+.moduplicate-combobox, .moduplicate-combobox .combo-box-base, .combo-box-base.moduplicate-combobox {
+  -fx-background-radius: 6;
+  -fx-border-radius: 6;
+  -fx-border-color: #b9b9b9;
+  -fx-background-insets: 0, 1;
+}
+
+/* Theme toggle (☀︎ / ☾) */
+.theme-toggle-box { -fx-background-color: transparent; -fx-padding: 0; }
+.theme-toggle {
+  -fx-background-color: #f1f1f1;
+  -fx-text-fill: #111;
+  -fx-border-color: #b9b9b9;
+  -fx-border-width: 1;
+  -fx-background-radius: 6;
+  -fx-border-radius: 6;
+  -fx-padding: 6 10 6 10;
+  -fx-font-size: 12px;
+}
+.theme-toggle.left  { -fx-background-radius: 6 0 0 6; -fx-border-radius: 6 0 0 6; }
+.theme-toggle.right { -fx-background-radius: 0 6 6 0; -fx-border-radius: 0 6 6 0; -fx-border-lWidth: 0; }
+.theme-toggle:selected { -fx-background-color: #e3e3e3; }

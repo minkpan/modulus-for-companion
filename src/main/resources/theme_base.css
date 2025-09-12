@@ -1,0 +1,4 @@
+/* Shared tweaks */
+.table-view {
+  -fx-background-insets: 0;
+}

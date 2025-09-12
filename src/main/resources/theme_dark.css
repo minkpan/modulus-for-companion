@@ -1,0 +1,48 @@
+/* DARK THEME */
+.root { -fx-base: #1b1d20; -fx-background: #1b1d20; -fx-text-fill: #e8e8e8; }
+
+.label, .button, .menu-bar, .menu, .menu-button {
+  -fx-text-fill: #e8e8e8;
+}
+
+/* Table backgrounds */
+.table-view { -fx-background-color: #1b1d20; }
+.table-row-cell { -fx-background-color: #1b1d20; }
+.table-row-cell:odd { -fx-background-color: #202328; }
+
+/* Table text (force light text for cells + headers) */
+.table-view .table-cell { -fx-text-fill: #e8e8e8; }
+.table-view .table-cell > .text { -fx-fill: #e8e8e8; } /* for Text nodes inside cells */
+.table-view .column-header .label { -fx-text-fill: #e8e8e8; }
+
+/* Selected row */
+.table-row-cell:selected { -fx-background-color: #2d68a0; }
+
+/* Module dropdown: make it visible in dark mode */
+.moduplicate-combobox, .moduplicate-combobox .combo-box-base, .combo-box-base.moduplicate-combobox,
+.combo-box-base {
+  -fx-background-color: #2a2e34;
+  -fx-text-fill: #e8e8e8;
+  -fx-background-radius: 6;
+  -fx-border-radius: 6;
+  -fx-border-color: #3a3f46;
+  -fx-background-insets: 0, 1;
+}
+.combo-box .list-cell { -fx-text-fill: #e8e8e8; }
+.combo-box .text-input { -fx-text-fill: #e8e8e8; }
+
+/* Theme toggle (☀︎ / ☾) */
+.theme-toggle-box { -fx-background-color: transparent; -fx-padding: 0; }
+.theme-toggle {
+  -fx-background-color: #2a2e34;
+  -fx-text-fill: #e8e8e8;
+  -fx-border-color: #3a3f46;
+  -fx-border-width: 1;
+  -fx-background-radius: 6;
+  -fx-border-radius: 6;
+  -fx-padding: 6 10 6 10;
+  -fx-font-size: 12px;
+}
+.theme-toggle.left  { -fx-background-radius: 6 0 0 6; -fx-border-radius: 6 0 0 6; }
+.theme-toggle.right { -fx-background-radius: 0 6 6 0; -fx-border-radius: 0 6 6 0; -fx-border-lWidth: 0; }
+.theme-toggle:selected { -fx-background-color: #3a3f46; }
