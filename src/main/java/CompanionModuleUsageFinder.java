@@ -25,15 +25,23 @@ import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.prefs.Preferences;
 import java.util.stream.Collectors;
+import java.util.prefs.Preferences;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class CompanionModuleUsageFinder extends Application {
-  // YAML keys
+  // YAML/JSON keys we use
   private static final String KEY_PAGES = "pages";
   private static final String KEY_CONTROLS = "controls";
   private static final String KEY_STEPS = "steps";
@@ -44,25 +52,7 @@ public class CompanionModuleUsageFinder extends Application {
   private static final String KEY_OPTIONS = "options";
   private static final String KEY_INSTANCE_ID = "instance_id";
 
-  // Theme
-  private enum Theme { LIGHT, DARK }
-  private static final String PREF_KEY_THEME = "theme";
-  private Theme currentTheme = Theme.LIGHT; // default if no pref
-  private Scene scene;
-  private final Preferences prefs = Preferences.userNodeForPackage(CompanionModuleUsageFinder.class);
-
-  // Internal usage record
-  private static class UsageRecord {
-    final String moduleInstanceId;
-    final int page, row, col, step; // row/col/step are 1-based
-    final String actionDefId;       // definition ID (best-effort)
-    UsageRecord(String moduleInstanceId, int page, int row, int col, int step, String actionDefId) {
-      this.moduleInstanceId = moduleInstanceId; this.page = page; this.row = row; this.col = col; this.step = step; this.actionDefId = actionDefId;
-    }
-    String buttonKey() { return row + "." + col; }
-  }
-
-  // One table line per row; page printed as its own line; next lines are buttons
+  // UI rows
   public static class LineRow {
     final SimpleStringProperty page   = new SimpleStringProperty();   // "9" on header row, "" otherwise
     final SimpleStringProperty button = new SimpleStringProperty();   // "" on header row, "1.2 (step 1)" on button rows
@@ -73,11 +63,28 @@ public class CompanionModuleUsageFinder extends Application {
     public String getAction() { return action.get(); }
   }
 
+  private static class UsageRecord {
+    final String moduleInstanceId;
+    final int page, row, col, step; // 1-based
+    final String actionDefId;
+    UsageRecord(String moduleInstanceId, int page, int row, int col, int step, String actionDefId) {
+      this.moduleInstanceId = moduleInstanceId; this.page = page; this.row = row; this.col = col; this.step = step; this.actionDefId = actionDefId;
+    }
+    String buttonKey() { return row + "." + col; }
+  }
+
   // UI state
   private final ComboBox<String> moduleDropdown = new ComboBox<>();
   private final TableView<LineRow> table = new TableView<>();
-  private final Label status = new Label("Drop a Companion YAML/.companionconfig here or use File > Open.");
+  private final Label status = new Label("Drop a .companionconfig (YAML/JSON/GZ/ZIP) or use File > Open.");
   private final Button copyBtn = new Button("Copy Selected");
+
+  // Theme (persist light/dark)
+  private enum Theme { LIGHT, DARK }
+  private static final String PREF_KEY_THEME = "theme";
+  private final Preferences prefs = Preferences.userNodeForPackage(CompanionModuleUsageFinder.class);
+  private Theme currentTheme = Theme.LIGHT;
+  private Scene scene;
 
   // Parsed state
   private Map<String, Map<String, Object>> instances;
@@ -88,63 +95,51 @@ public class CompanionModuleUsageFinder extends Application {
   public void start(Stage stage) {
     stage.setTitle("Modulus for Companion");
 
-    // Window icon (if present)
     try {
       Image icon = new Image(Objects.requireNonNull(
           CompanionModuleUsageFinder.class.getResourceAsStream("/icons/app.png")));
       stage.getIcons().add(icon);
     } catch (Exception ignored) {}
 
-    // Menubar
+    // Menus
     MenuBar menuBar = new MenuBar();
     Menu fileMenu = new Menu("File");
-    MenuItem openItem = new MenuItem("Open YAML...");
-    openItem.setOnAction(e -> openYamlDialog(stage));
+    MenuItem openItem = new MenuItem("Open Config…");
+    openItem.setOnAction(e -> openConfigDialog(stage));
     MenuItem copyItem = new MenuItem("Copy Selected");
     copyItem.setOnAction(e -> copySelectedRows());
     fileMenu.getItems().addAll(openItem, new SeparatorMenuItem(), copyItem);
     menuBar.getMenus().add(fileMenu);
 
-    // Top controls (left: module & copy, right: theme toggle)
-    moduleDropdown.setPromptText("Select a module...");
+    // Theme toggle ☀︎ / ☾
+    ToggleButton lightBtn = new ToggleButton("☀︎");
+    ToggleButton darkBtn  = new ToggleButton("☾");
+    ToggleGroup tg = new ToggleGroup();
+    lightBtn.setToggleGroup(tg); darkBtn.setToggleGroup(tg);
+    String saved = prefs.get(PREF_KEY_THEME, "light");
+    currentTheme = "dark".equalsIgnoreCase(saved) ? Theme.DARK : Theme.LIGHT;
+    if (currentTheme == Theme.DARK) darkBtn.setSelected(true); else lightBtn.setSelected(true);
+    lightBtn.setOnAction(e -> { currentTheme = Theme.LIGHT; applyTheme(); prefs.put(PREF_KEY_THEME, "light"); });
+    darkBtn.setOnAction(e  -> { currentTheme = Theme.DARK;  applyTheme(); prefs.put(PREF_KEY_THEME, "dark");  });
+    HBox themeBox = new HBox(lightBtn, darkBtn);
+
+    // Top controls
+    moduleDropdown.setPromptText("Select a module…");
     moduleDropdown.setDisable(true);
     moduleDropdown.valueProperty().addListener((obs, o, n) -> refreshTableForModule(n));
-    moduleDropdown.getStyleClass().add("moduplicate-combobox"); // styling for dark mode
 
     copyBtn.setDisable(true);
     copyBtn.setOnAction(e -> copySelectedRows());
 
-    // Two-position theme toggle: ☀︎ (Light) | ☾ (Dark)
-    ToggleButton lightBtn = new ToggleButton("☀︎");
-    ToggleButton darkBtn  = new ToggleButton("☾");
-    lightBtn.getStyleClass().addAll("theme-toggle", "left");
-    darkBtn.getStyleClass().addAll("theme-toggle", "right");
-    ToggleGroup tg = new ToggleGroup();
-    lightBtn.setToggleGroup(tg);
-    darkBtn.setToggleGroup(tg);
-
-    // Load saved preference; default LIGHT
-    String saved = prefs.get(PREF_KEY_THEME, "light");
-    currentTheme = "dark".equalsIgnoreCase(saved) ? Theme.DARK : Theme.LIGHT;
-    if (currentTheme == Theme.DARK) darkBtn.setSelected(true); else lightBtn.setSelected(true);
-
-    lightBtn.setOnAction(e -> { currentTheme = Theme.LIGHT; applyTheme(); prefs.put(PREF_KEY_THEME, "light"); });
-    darkBtn.setOnAction(e  -> { currentTheme = Theme.DARK;  applyTheme(); prefs.put(PREF_KEY_THEME, "dark");  });
-
-    HBox themeBox = new HBox(lightBtn, darkBtn);
-    themeBox.getStyleClass().add("theme-toggle-box");
-
     Region spacer = new Region();
     HBox.setHgrow(spacer, javafx.scene.layout.Priority.ALWAYS);
-
     HBox top = new HBox(10, new Label("Module:"), moduleDropdown, copyBtn, spacer, themeBox);
     top.setPadding(new Insets(10));
 
-    // Table columns
+    // Table
     TableColumn<LineRow, String> colPage = new TableColumn<>("Page");
     colPage.setCellValueFactory(c -> c.getValue().page);
-    colPage.setMinWidth(80);
-    colPage.setMaxWidth(120);
+    colPage.setMinWidth(80); colPage.setMaxWidth(120);
 
     TableColumn<LineRow, String> colButton = new TableColumn<>("Button (row.col with steps)");
     colButton.setCellValueFactory(c -> c.getValue().button);
@@ -157,7 +152,7 @@ public class CompanionModuleUsageFinder extends Application {
     table.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
     table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
 
-    // Cmd/Ctrl + C to copy (leaves copy format as you had it: page & button text only)
+    // Copy via Cmd/Ctrl+C
     final KeyCombination COPY_KC = new KeyCodeCombination(
         KeyCode.C,
         System.getProperty("os.name").toLowerCase().contains("mac")
@@ -165,6 +160,7 @@ public class CompanionModuleUsageFinder extends Application {
     );
     table.setOnKeyPressed(e -> { if (COPY_KC.match(e)) copySelectedRows(); });
 
+    // Layout
     BorderPane root = new BorderPane();
     root.setTop(new VBox(menuBar, top));
     root.setCenter(table);
@@ -175,25 +171,27 @@ public class CompanionModuleUsageFinder extends Application {
     scene = new Scene(root, 1000, 560);
 
     // Drag & drop
-    scene.setOnDragOver(event -> {
-      Dragboard db = event.getDragboard();
-      if (db.hasFiles()) event.acceptTransferModes(TransferMode.COPY);
-      event.consume();
+    scene.setOnDragOver(e -> {
+      Dragboard db = e.getDragboard();
+      if (db.hasFiles()) e.acceptTransferModes(TransferMode.COPY);
+      e.consume();
     });
     scene.setOnDragDropped(this::handleFileDrop);
 
     stage.setScene(scene);
-    applyTheme(); // apply saved/default theme
+    applyTheme();
     stage.show();
   }
 
   private void applyTheme() {
     if (scene == null) return;
     scene.getStylesheets().clear();
-    String themeCss = (currentTheme == Theme.DARK)
-        ? getClass().getResource("/theme_dark.css").toExternalForm()
-        : getClass().getResource("/theme_light.css").toExternalForm();
-    scene.getStylesheets().add(themeCss);
+    try {
+      String themeCss = (currentTheme == Theme.DARK)
+          ? getClass().getResource("/theme_dark.css").toExternalForm()
+          : getClass().getResource("/theme_light.css").toExternalForm();
+      scene.getStylesheets().add(themeCss);
+    } catch (Exception ignored) {}
   }
 
   private void copySelectedRows() {
@@ -209,16 +207,15 @@ public class CompanionModuleUsageFinder extends Application {
     Clipboard.getSystemClipboard().setContent(cc);
   }
 
-  private void openYamlDialog(Stage stage) {
+  private void openConfigDialog(Stage stage) {
     FileChooser fc = new FileChooser();
     fc.setTitle("Open Companion Config");
     fc.getExtensionFilters().addAll(
         new FileChooser.ExtensionFilter("Companion Config (*.companionconfig)", "*.companionconfig"),
-        new FileChooser.ExtensionFilter("YAML Files", "*.yaml", "*.yml"),
         new FileChooser.ExtensionFilter("All Files", "*.*")
     );
     File f = fc.showOpenDialog(stage);
-    if (f != null) loadYaml(f);
+    if (f != null) loadConfig(f);
   }
 
   private void handleFileDrop(DragEvent event) {
@@ -226,35 +223,22 @@ public class CompanionModuleUsageFinder extends Application {
     boolean success = false;
     if (db.hasFiles()) {
       File f = db.getFiles().get(0);
-      loadYaml(f);
+      loadConfig(f);
       success = true;
     }
     event.setDropCompleted(success);
     event.consume();
   }
 
+  // ========= Robust loader: handles YAML, JSON, GZIP(JSON/YAML), ZIP(JSON/YAML) irrespective of extension =========
   @SuppressWarnings("unchecked")
-  private void loadYaml(File f) {
-    try (InputStream in = new FileInputStream(f)) {
-      LoaderOptions opts = new LoaderOptions();
-      opts.setCodePointLimit(256 * 1024 * 1024);    // large documents
-      opts.setMaxAliasesForCollections(1_000_000);  // lots of anchors/aliases
-      opts.setAllowDuplicateKeys(true);
-      opts.setAllowRecursiveKeys(true);
-
-      Yaml yaml = new Yaml(new Constructor(opts));
-      Object rootObj = yaml.load(in);
-      if (!(rootObj instanceof Map)) {
-        setStatus("YAML root is not a map; unsupported file.");
-        return;
-      }
-      Map<String, Object> root = (Map<String, Object>) rootObj;
+  private void loadConfig(File f) {
+    try {
+      Map<String,Object> root = readConfigAuto(f);
+      if (root == null) { setStatus("Unsupported or empty config: " + f.getName()); return; }
 
       Object instObj = root.get(KEY_INSTANCES);
-      if (!(instObj instanceof Map)) {
-        setStatus("No `instances` section found; is this a Companion export?");
-        return;
-      }
+      if (!(instObj instanceof Map)) { setStatus("No `instances` section found; is this a Companion export?"); return; }
       this.instances = (Map<String, Map<String, Object>>) (Map<?,?>) instObj;
 
       this.instanceLabels = new TreeMap<>();
@@ -281,19 +265,102 @@ public class CompanionModuleUsageFinder extends Application {
       copyBtn.setDisable(true);
       table.getItems().clear();
 
-      // Auto-select FIRST module and populate table immediately
       if (!dropdownLabels.isEmpty()) {
+        // Auto-select first module and populate
         moduleDropdown.getSelectionModel().select(0);
         refreshTableForModule(dropdownLabels.get(0));
         setStatus("Parsed " + f.getName() + " (" + dropdownLabels.size() + " modules with usages). Selected: " + dropdownLabels.get(0));
       } else {
         setStatus("Parsed " + f.getName() + ". No module usages found.");
       }
+
     } catch (Exception ex) {
       ex.printStackTrace();
-      String msg = ex.getMessage();
-      setStatus("Failed to load (" + ex.getClass().getSimpleName() + "): " + (msg == null ? "(no message)" : msg));
+      setStatus("Failed to load (" + ex.getClass().getSimpleName() + "): " + (ex.getMessage() == null ? "(no message)" : ex.getMessage()));
     }
+  }
+
+  /** Read a config file as YAML or JSON, handling GZIP and ZIP by magic bytes (works even if name ends with .companionconfig). */
+  @SuppressWarnings("unchecked")
+  private Map<String,Object> readConfigAuto(File file) throws Exception {
+    byte[] all = readAll(file);
+
+    // GZIP magic 1F 8B
+    if (all.length >= 2 && (all[0] & 0xFF) == 0x1F && (all[1] & 0xFF) == 0x8B) {
+      try (GZIPInputStream gin = new GZIPInputStream(new ByteArrayInputStream(all))) {
+        byte[] unz = gin.readAllBytes();
+        return parseBuffer(unz, "inner.gz");
+      }
+    }
+
+    // ZIP magic "PK"
+    if (all.length >= 2 && all[0] == 0x50 && all[1] == 0x4B) {
+      try (ZipInputStream zin = new ZipInputStream(new ByteArrayInputStream(all))) {
+        ZipEntry e;
+        while ((e = zin.getNextEntry()) != null) {
+          if (e.isDirectory()) continue;
+          byte[] bytes = zin.readAllBytes();
+          Map<String,Object> parsed = tryParseBoth(bytes, e.getName().toLowerCase(Locale.ROOT));
+          if (parsed != null) return parsed; // first decodable entry
+        }
+      }
+      return null;
+    }
+
+    // Plain file; decide JSON vs YAML by content
+    return parseBuffer(all, file.getName().toLowerCase(Locale.ROOT));
+  }
+
+  /** Decide JSON vs YAML by first non-space char (or extension), and parse. Falls back to the other on failure. */
+  @SuppressWarnings("unchecked")
+  private Map<String,Object> parseBuffer(byte[] bytes, String nameLower) {
+    String head = new String(bytes, 0, Math.min(bytes.length, 1024), StandardCharsets.UTF_8).trim();
+    boolean looksJson = nameLower.endsWith(".json") || head.startsWith("{") || head.startsWith("[");
+    try {
+      if (looksJson) {
+        ObjectMapper mapper = new ObjectMapper();
+        return mapper.readValue(bytes, Map.class);
+      } else {
+        LoaderOptions opts = new LoaderOptions();
+        opts.setCodePointLimit(256 * 1024 * 1024);
+        opts.setMaxAliasesForCollections(1_000_000);
+        opts.setAllowDuplicateKeys(true);
+        opts.setAllowRecursiveKeys(true);
+        Yaml yaml = new Yaml(new Constructor(opts));
+        Object rootObj = yaml.load(new ByteArrayInputStream(bytes));
+        if (rootObj instanceof Map) return (Map<String,Object>) rootObj;
+
+        // Fallback to JSON if YAML root wasn't a map
+        ObjectMapper mapper = new ObjectMapper();
+        return mapper.readValue(bytes, Map.class);
+      }
+    } catch (Exception primary) {
+      try {
+        if (looksJson) {
+          LoaderOptions opts = new LoaderOptions();
+          opts.setCodePointLimit(256 * 1024 * 1024);
+          opts.setMaxAliasesForCollections(1_000_000);
+          opts.setAllowDuplicateKeys(true);
+          opts.setAllowRecursiveKeys(true);
+          Yaml yaml = new Yaml(new Constructor(opts));
+          Object rootObj = yaml.load(new ByteArrayInputStream(bytes));
+          if (rootObj instanceof Map) return (Map<String,Object>) rootObj;
+        } else {
+          ObjectMapper mapper = new ObjectMapper();
+          return mapper.readValue(bytes, Map.class);
+        }
+      } catch (Exception ignored) {}
+      throw new RuntimeException("Unsupported or malformed config");
+    }
+  }
+
+  private Map<String,Object> tryParseBoth(byte[] bytes, String nameLower) {
+    try { return parseBuffer(bytes, nameLower); }
+    catch (RuntimeException re) { return null; }
+  }
+
+  private static byte[] readAll(File f) throws Exception {
+    try (InputStream in = new BufferedInputStream(new FileInputStream(f))) { return in.readAllBytes(); }
   }
 
   private void setStatus(String msg) { status.setText(msg); }
@@ -306,10 +373,10 @@ public class CompanionModuleUsageFinder extends Application {
     // Extract instanceId from "Label (id)"
     String instanceId = dropdownValue.replaceAll(".*\\((.*)\\)$", "$1");
 
-    // Group by page -> button -> {steps, actions}
+    // Aggregate: page -> button -> (steps, actions)
     class Agg {
       final Set<Integer> steps = new TreeSet<>();
-      final LinkedHashSet<String> actions = new LinkedHashSet<>(); // preserve step order, de-dupe
+      final LinkedHashSet<String> actions = new LinkedHashSet<>();
     }
     Map<Integer, Map<String, Agg>> byPage = new TreeMap<>();
 
@@ -318,28 +385,20 @@ public class CompanionModuleUsageFinder extends Application {
       Map<String, Agg> pageMap = byPage.computeIfAbsent(u.page, k -> new TreeMap<>(new ButtonKeyComparator()));
       Agg agg = pageMap.computeIfAbsent(u.buttonKey(), k -> new Agg());
       agg.steps.add(u.step);
-      if (u.actionDefId != null && !u.actionDefId.isBlank()) {
-        agg.actions.add(u.actionDefId.trim());
-      }
+      if (u.actionDefId != null && !u.actionDefId.isBlank()) agg.actions.add(u.actionDefId.trim());
     }
 
-    // Build rows (page header row, then button rows with actions)
+    // Build rows (page header row, then button rows)
     ObservableList<LineRow> rows = FXCollections.observableArrayList();
     for (Map.Entry<Integer, Map<String, Agg>> pe : byPage.entrySet()) {
-      String pageStr = String.valueOf(pe.getKey());
-      rows.add(new LineRow(pageStr, "", ""));  // header row
-
+      rows.add(new LineRow(String.valueOf(pe.getKey()), "", ""));
       for (Map.Entry<String, Agg> be : pe.getValue().entrySet()) {
         String btn = be.getKey();
         List<Integer> steps = new ArrayList<>(be.getValue().steps);
         String stepText = steps.size() == 1
             ? "(step " + steps.get(0) + ")"
             : "(steps " + steps.stream().map(Object::toString).collect(Collectors.joining(", ")) + ")";
-
-        String actionText = be.getValue().actions.isEmpty()
-            ? ""
-            : String.join(", ", be.getValue().actions);
-
+        String actionText = be.getValue().actions.isEmpty() ? "" : String.join(", ", be.getValue().actions);
         rows.add(new LineRow("", btn + " " + stepText, actionText));
       }
     }
@@ -348,22 +407,20 @@ public class CompanionModuleUsageFinder extends Application {
     copyBtn.setDisable(rows.isEmpty());
   }
 
-  /** Sorts "row.col" keys numerically. */
+  /** Sorts "row.col" numerically. */
   private static class ButtonKeyComparator implements Comparator<String> {
     @Override public int compare(String a, String b) {
-      int[] A = parse(a); int[] B = parse(b);
+      int[] A = parse(a), B = parse(b);
       if (A[0] != B[0]) return Integer.compare(A[0], B[0]);
       return Integer.compare(A[1], B[1]);
     }
     private int[] parse(String s) {
-      try {
-        String[] p = s.split("\\.");
-        return new int[]{ Integer.parseInt(p[0]), Integer.parseInt(p[1]) };
-      } catch (Exception e) { return new int[]{ Integer.MAX_VALUE, Integer.MAX_VALUE }; }
+      try { String[] p = s.split("\\."); return new int[]{ Integer.parseInt(p[0]), Integer.parseInt(p[1]) }; }
+      catch (Exception e) { return new int[]{ Integer.MAX_VALUE, Integer.MAX_VALUE }; }
     }
   }
 
-  // ===== YAML scanning (adds actionDefId capture) =====
+  // ===== Scanning logic (works for both YAML & JSON dumps you provided) =====
   @SuppressWarnings("unchecked")
   private static List<UsageRecord> scanUsage(Map<String, Object> root, Map<String, String> instanceLabels) {
     List<UsageRecord> out = new ArrayList<>();
@@ -423,7 +480,6 @@ public class CompanionModuleUsageFinder extends Application {
 
                 String targetInstanceId = direct ? connectionId : (viaOpts ? maybeInstance : null);
                 if (targetInstanceId != null) {
-                  // Best-effort action definition id (handles various possible keys)
                   String defId = firstNonBlank(
                       optString(action.get("definitionId")),
                       optString(action.get("definition_id")),
@@ -431,14 +487,7 @@ public class CompanionModuleUsageFinder extends Application {
                       optString(action.get("action_id")),
                       optString(action.get("id"))
                   );
-                  out.add(new UsageRecord(
-                      targetInstanceId,
-                      pageNum,
-                      rowIndex + 1,
-                      colIndex + 1,
-                      stepIndex + 1,
-                      defId
-                  ));
+                  out.add(new UsageRecord(targetInstanceId, pageNum, rowIndex + 1, colIndex + 1, stepIndex + 1, defId));
                 }
               }
             }
@@ -454,7 +503,6 @@ public class CompanionModuleUsageFinder extends Application {
     for (String v : vals) if (v != null && !v.isBlank()) return v;
     return null;
   }
-
   private static int parseIntSafe(String s, int fallback) { try { return Integer.parseInt(s); } catch (Exception e) { return fallback; } }
   @SuppressWarnings("unchecked") private static Map<String, Object> asMap(Object o) { return (o instanceof Map) ? (Map<String, Object>) o : null; }
   private static String optString(Object o) { return (o == null) ? null : o.toString(); }
