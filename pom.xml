@@ -61,13 +61,26 @@
 
       <!-- Put the Main-Class into the JAR manifest so jpackage can find it -->
       <plugin>
+  	<groupId>org.apache.maven.plugins</groupId>
+  	<artifactId>maven-jar-plugin</artifactId>
+  	<version>3.3.0</version>
+  	<configuration>
+   	 <archive>
+     	   <manifest>
+       	    <mainClass>ModulusForCompanion</mainClass>
+       	    <addClasspath>true</addClasspath>
+     	   </manifest>
+   	 </archive>
+  	</configuration>
+      </plugin>
+      <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
         <version>3.3.0</version>
         <configuration>
           <archive>
             <manifest>
-              <mainClass>CompanionModuleUsageFinder</mainClass>
+              <mainClass>ModulusForCompanion</mainClass>
               <addClasspath>true</addClasspath>
             </manifest>
           </archive>

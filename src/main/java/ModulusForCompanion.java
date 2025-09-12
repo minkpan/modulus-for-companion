@@ -31,17 +31,19 @@ import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileWriter;
 import java.io.InputStream;
+import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.stream.Collectors;
 import java.util.prefs.Preferences;
+import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-public class CompanionModuleUsageFinder extends Application {
-  // YAML/JSON keys we use
+public class ModulusForCompanion extends Application {
+  // Keys used in Companion exports
   private static final String KEY_PAGES = "pages";
   private static final String KEY_CONTROLS = "controls";
   private static final String KEY_STEPS = "steps";
@@ -52,20 +54,28 @@ public class CompanionModuleUsageFinder extends Application {
   private static final String KEY_OPTIONS = "options";
   private static final String KEY_INSTANCE_ID = "instance_id";
 
-  // UI rows
+  // Theme
+  private enum Theme { LIGHT, DARK }
+  private static final String PREF_KEY_THEME = "theme";
+  private Theme currentTheme = Theme.LIGHT;
+  private Scene scene;
+  private final Preferences prefs = Preferences.userNodeForPackage(ModulusForCompanion.class);
+
+  // UI Row
   public static class LineRow {
-    final SimpleStringProperty page   = new SimpleStringProperty();   // "9" on header row, "" otherwise
-    final SimpleStringProperty button = new SimpleStringProperty();   // "" on header row, "1.2 (step 1)" on button rows
-    final SimpleStringProperty action = new SimpleStringProperty();   // "" on header row, "defA, defB" on button rows
+    final SimpleStringProperty page   = new SimpleStringProperty(); // "9" on header row, "" otherwise
+    final SimpleStringProperty button = new SimpleStringProperty(); // "" on header row, "1.2 (steps ...)" on rows
+    final SimpleStringProperty action = new SimpleStringProperty(); // action ids per button, deduped
     LineRow(String page, String button, String action) { this.page.set(page); this.button.set(button); this.action.set(action); }
     public String getPage()   { return page.get(); }
     public String getButton() { return button.get(); }
     public String getAction() { return action.get(); }
   }
 
+  // Usage record (from scan)
   private static class UsageRecord {
     final String moduleInstanceId;
-    final int page, row, col, step; // 1-based
+    final int page, row, col, step; // all 1-based
     final String actionDefId;
     UsageRecord(String moduleInstanceId, int page, int row, int col, int step, String actionDefId) {
       this.moduleInstanceId = moduleInstanceId; this.page = page; this.row = row; this.col = col; this.step = step; this.actionDefId = actionDefId;
@@ -77,31 +87,34 @@ public class CompanionModuleUsageFinder extends Application {
   private final ComboBox<String> moduleDropdown = new ComboBox<>();
   private final TableView<LineRow> table = new TableView<>();
   private final Label status = new Label("Drop a .companionconfig (YAML/JSON/GZ/ZIP) or use File > Open.");
+  // legacy copy button (hidden)
   private final Button copyBtn = new Button("Copy Selected");
-
-  // Theme (persist light/dark)
-  private enum Theme { LIGHT, DARK }
-  private static final String PREF_KEY_THEME = "theme";
-  private final Preferences prefs = Preferences.userNodeForPackage(CompanionModuleUsageFinder.class);
-  private Theme currentTheme = Theme.LIGHT;
-  private Scene scene;
+  // NEW: Export buttons
+  private final Button exportBtn = new Button("Export list");
+  private final Button fullExportBtn = new Button("Full export");
 
   // Parsed state
   private Map<String, Map<String, Object>> instances;
-  private Map<String, String> instanceLabels;
+  private Map<String, String> instanceLabels; // id -> label
   private List<UsageRecord> allUsage = new ArrayList<>();
+
+  // exporting helpers
+  private String currentConfigName = null; // loaded file name
+  // module label (no id) -> rows for that module
+  private final Map<String, List<LineRow>> allModuleRows = new LinkedHashMap<>();
 
   @Override
   public void start(Stage stage) {
     stage.setTitle("Modulus for Companion");
 
+    // Window icon (if present)
     try {
       Image icon = new Image(Objects.requireNonNull(
-          CompanionModuleUsageFinder.class.getResourceAsStream("/icons/app.png")));
+          ModulusForCompanion.class.getResourceAsStream("/icons/app.png")));
       stage.getIcons().add(icon);
     } catch (Exception ignored) {}
 
-    // Menus
+    // Menubar
     MenuBar menuBar = new MenuBar();
     Menu fileMenu = new Menu("File");
     MenuItem openItem = new MenuItem("Open Config…");
@@ -115,31 +128,44 @@ public class CompanionModuleUsageFinder extends Application {
     ToggleButton lightBtn = new ToggleButton("☀︎");
     ToggleButton darkBtn  = new ToggleButton("☾");
     ToggleGroup tg = new ToggleGroup();
-    lightBtn.setToggleGroup(tg); darkBtn.setToggleGroup(tg);
+    lightBtn.setToggleGroup(tg);
+    darkBtn.setToggleGroup(tg);
     String saved = prefs.get(PREF_KEY_THEME, "light");
     currentTheme = "dark".equalsIgnoreCase(saved) ? Theme.DARK : Theme.LIGHT;
     if (currentTheme == Theme.DARK) darkBtn.setSelected(true); else lightBtn.setSelected(true);
     lightBtn.setOnAction(e -> { currentTheme = Theme.LIGHT; applyTheme(); prefs.put(PREF_KEY_THEME, "light"); });
     darkBtn.setOnAction(e  -> { currentTheme = Theme.DARK;  applyTheme(); prefs.put(PREF_KEY_THEME, "dark");  });
     HBox themeBox = new HBox(lightBtn, darkBtn);
+    themeBox.getStyleClass().add("theme-toggle-box");
 
     // Top controls
-    moduleDropdown.setPromptText("Select a module…");
+    moduleDropdown.setPromptText("Select a module...");
     moduleDropdown.setDisable(true);
-    moduleDropdown.valueProperty().addListener((obs, o, n) -> refreshTableForModule(n));
+    moduleDropdown.valueProperty().addListener((obs, o, n) -> {
+      refreshTableForModule(n);
+      exportBtn.setDisable(table.getItems().isEmpty());
+    });
 
-    copyBtn.setDisable(true);
-    copyBtn.setOnAction(e -> copySelectedRows());
+    // Hide old copy button in UI
+    copyBtn.setVisible(false);
+    copyBtn.setManaged(false);
+
+    // Export buttons
+    exportBtn.setDisable(true);
+    fullExportBtn.setDisable(true);
+    exportBtn.setOnAction(e -> exportCurrentTable(stage));
+    fullExportBtn.setOnAction(e -> exportAllTables(stage));
 
     Region spacer = new Region();
     HBox.setHgrow(spacer, javafx.scene.layout.Priority.ALWAYS);
-    HBox top = new HBox(10, new Label("Module:"), moduleDropdown, copyBtn, spacer, themeBox);
+    HBox top = new HBox(10, new Label("Module:"), moduleDropdown, exportBtn, fullExportBtn, spacer, themeBox);
     top.setPadding(new Insets(10));
 
     // Table
     TableColumn<LineRow, String> colPage = new TableColumn<>("Page");
     colPage.setCellValueFactory(c -> c.getValue().page);
-    colPage.setMinWidth(80); colPage.setMaxWidth(120);
+    colPage.setMinWidth(80);
+    colPage.setMaxWidth(120);
 
     TableColumn<LineRow, String> colButton = new TableColumn<>("Button (row.col with steps)");
     colButton.setCellValueFactory(c -> c.getValue().button);
@@ -152,7 +178,7 @@ public class CompanionModuleUsageFinder extends Application {
     table.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
     table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
 
-    // Copy via Cmd/Ctrl+C
+    // Cmd/Ctrl + C copy (kept)
     final KeyCombination COPY_KC = new KeyCodeCombination(
         KeyCode.C,
         System.getProperty("os.name").toLowerCase().contains("mac")
@@ -171,10 +197,10 @@ public class CompanionModuleUsageFinder extends Application {
     scene = new Scene(root, 1000, 560);
 
     // Drag & drop
-    scene.setOnDragOver(e -> {
-      Dragboard db = e.getDragboard();
-      if (db.hasFiles()) e.acceptTransferModes(TransferMode.COPY);
-      e.consume();
+    scene.setOnDragOver(event -> {
+      Dragboard db = event.getDragboard();
+      if (db.hasFiles()) event.acceptTransferModes(TransferMode.COPY);
+      event.consume();
     });
     scene.setOnDragDropped(this::handleFileDrop);
 
@@ -230,7 +256,7 @@ public class CompanionModuleUsageFinder extends Application {
     event.consume();
   }
 
-  // ========= Robust loader: handles YAML, JSON, GZIP(JSON/YAML), ZIP(JSON/YAML) irrespective of extension =========
+  // ====== Config loader (YAML / JSON / GZ / ZIP by magic bytes) ======
   @SuppressWarnings("unchecked")
   private void loadConfig(File f) {
     try {
@@ -262,25 +288,36 @@ public class CompanionModuleUsageFinder extends Application {
 
       moduleDropdown.setItems(FXCollections.observableArrayList(dropdownLabels));
       moduleDropdown.setDisable(dropdownLabels.isEmpty());
-      copyBtn.setDisable(true);
+
+      // cache rows for every module for "Full export"
+      allModuleRows.clear();
+      for (String dd : dropdownLabels) {
+        String instanceId = extractInstanceId(dd);
+        String labelOnly = dd.replaceAll("\\s*\\(.*\\)$", "");
+        allModuleRows.put(labelOnly, new ArrayList<>(buildRowsForInstance(instanceId)));
+      }
+
+      // Update export enablement and current config filename
+      this.currentConfigName = f.getName();
+      fullExportBtn.setDisable(allModuleRows.isEmpty());
+
       table.getItems().clear();
+      exportBtn.setDisable(true);
 
       if (!dropdownLabels.isEmpty()) {
-        // Auto-select first module and populate
         moduleDropdown.getSelectionModel().select(0);
         refreshTableForModule(dropdownLabels.get(0));
         setStatus("Parsed " + f.getName() + " (" + dropdownLabels.size() + " modules with usages). Selected: " + dropdownLabels.get(0));
       } else {
         setStatus("Parsed " + f.getName() + ". No module usages found.");
       }
-
     } catch (Exception ex) {
       ex.printStackTrace();
       setStatus("Failed to load (" + ex.getClass().getSimpleName() + "): " + (ex.getMessage() == null ? "(no message)" : ex.getMessage()));
     }
   }
 
-  /** Read a config file as YAML or JSON, handling GZIP and ZIP by magic bytes (works even if name ends with .companionconfig). */
+  /** Read a config as YAML or JSON, handling GZIP and ZIP by magic bytes (works even if name ends with .companionconfig). */
   @SuppressWarnings("unchecked")
   private Map<String,Object> readConfigAuto(File file) throws Exception {
     byte[] all = readAll(file);
@@ -311,11 +348,12 @@ public class CompanionModuleUsageFinder extends Application {
     return parseBuffer(all, file.getName().toLowerCase(Locale.ROOT));
   }
 
-  /** Decide JSON vs YAML by first non-space char (or extension), and parse. Falls back to the other on failure. */
+  /** Decide JSON vs YAML by first non-space char (or extension). Falls back to the other on failure. */
   @SuppressWarnings("unchecked")
   private Map<String,Object> parseBuffer(byte[] bytes, String nameLower) {
     String head = new String(bytes, 0, Math.min(bytes.length, 1024), StandardCharsets.UTF_8).trim();
     boolean looksJson = nameLower.endsWith(".json") || head.startsWith("{") || head.startsWith("[");
+
     try {
       if (looksJson) {
         ObjectMapper mapper = new ObjectMapper();
@@ -330,7 +368,7 @@ public class CompanionModuleUsageFinder extends Application {
         Object rootObj = yaml.load(new ByteArrayInputStream(bytes));
         if (rootObj instanceof Map) return (Map<String,Object>) rootObj;
 
-        // Fallback to JSON if YAML root wasn't a map
+        // Fallback to JSON
         ObjectMapper mapper = new ObjectMapper();
         return mapper.readValue(bytes, Map.class);
       }
@@ -365,15 +403,26 @@ public class CompanionModuleUsageFinder extends Application {
 
   private void setStatus(String msg) { status.setText(msg); }
 
+  // ====== Table population & export support ======
+
   private void refreshTableForModule(String dropdownValue) {
     table.getItems().clear();
-    copyBtn.setDisable(true);
+    exportBtn.setDisable(true);
     if (dropdownValue == null || dropdownValue.isBlank()) return;
 
-    // Extract instanceId from "Label (id)"
-    String instanceId = dropdownValue.replaceAll(".*\\((.*)\\)$", "$1");
+    String instanceId = extractInstanceId(dropdownValue);
+    ObservableList<LineRow> rows = buildRowsForInstance(instanceId);
 
-    // Aggregate: page -> button -> (steps, actions)
+    table.setItems(rows);
+    exportBtn.setDisable(rows.isEmpty());
+
+    // Keep a cached copy for this module too (label-only key)
+    String labelOnly = dropdownValue.replaceAll("\\s*\\(.*\\)$", "");
+    allModuleRows.put(labelOnly, new ArrayList<>(rows));
+  }
+
+  /** Build the rows (page headers + buttons) for a single instanceId from allUsage. */
+  private ObservableList<LineRow> buildRowsForInstance(String instanceId) {
     class Agg {
       final Set<Integer> steps = new TreeSet<>();
       final LinkedHashSet<String> actions = new LinkedHashSet<>();
@@ -385,13 +434,15 @@ public class CompanionModuleUsageFinder extends Application {
       Map<String, Agg> pageMap = byPage.computeIfAbsent(u.page, k -> new TreeMap<>(new ButtonKeyComparator()));
       Agg agg = pageMap.computeIfAbsent(u.buttonKey(), k -> new Agg());
       agg.steps.add(u.step);
-      if (u.actionDefId != null && !u.actionDefId.isBlank()) agg.actions.add(u.actionDefId.trim());
+      if (u.actionDefId != null && !u.actionDefId.isBlank()) {
+        agg.actions.add(u.actionDefId.trim());
+      }
     }
 
-    // Build rows (page header row, then button rows)
     ObservableList<LineRow> rows = FXCollections.observableArrayList();
     for (Map.Entry<Integer, Map<String, Agg>> pe : byPage.entrySet()) {
-      rows.add(new LineRow(String.valueOf(pe.getKey()), "", ""));
+      String pageStr = String.valueOf(pe.getKey());
+      rows.add(new LineRow(pageStr, "", "")); // page header
       for (Map.Entry<String, Agg> be : pe.getValue().entrySet()) {
         String btn = be.getKey();
         List<Integer> steps = new ArrayList<>(be.getValue().steps);
@@ -402,25 +453,97 @@ public class CompanionModuleUsageFinder extends Application {
         rows.add(new LineRow("", btn + " " + stepText, actionText));
       }
     }
-
-    table.setItems(rows);
-    copyBtn.setDisable(rows.isEmpty());
+    return rows;
   }
 
-  /** Sorts "row.col" numerically. */
-  private static class ButtonKeyComparator implements Comparator<String> {
-    @Override public int compare(String a, String b) {
-      int[] A = parse(a), B = parse(b);
-      if (A[0] != B[0]) return Integer.compare(A[0], B[0]);
-      return Integer.compare(A[1], B[1]);
-    }
-    private int[] parse(String s) {
-      try { String[] p = s.split("\\."); return new int[]{ Integer.parseInt(p[0]), Integer.parseInt(p[1]) }; }
-      catch (Exception e) { return new int[]{ Integer.MAX_VALUE, Integer.MAX_VALUE }; }
+  /** Extract instanceId from "Label (id)". */
+  private static String extractInstanceId(String dropdownValue) {
+    return dropdownValue.replaceAll(".*\\((.*)\\)$", "$1");
+  }
+
+  /** Export only the currently displayed module's table to CSV. */
+  private void exportCurrentTable(Stage stage) {
+    String selected = moduleDropdown.getValue();
+    if (selected == null || currentConfigName == null) return;
+
+    String label = selected.replaceAll("\\s*\\(.*\\)$", "").replaceAll("\\s+", "_");
+    String base = new File(currentConfigName).getName();
+    String defaultName = label + "." + base + ".csv";
+
+    FileChooser fc = new FileChooser();
+    fc.setTitle("Save CSV for " + label);
+    fc.setInitialFileName(defaultName);
+    fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV", "*.csv"));
+    File dest = fc.showSaveDialog(stage);
+    if (dest != null) {
+      writeCsv(dest, table.getItems(), false, selected.replaceAll("\\s*\\(.*\\)$", ""));
+      setStatus("Exported current module to " + dest.getName());
     }
   }
 
-  // ===== Scanning logic (works for both YAML & JSON dumps you provided) =====
+/** Export all modules to a single CSV, showing Module only on page-header rows. */
+private void exportAllTables(Stage stage) {
+  if (currentConfigName == null || allModuleRows.isEmpty()) return;
+
+  String base = new File(currentConfigName).getName();
+  String defaultName = base + ".csv";
+
+  FileChooser fc = new FileChooser();
+  fc.setTitle("Save full CSV");
+  fc.setInitialFileName(defaultName);
+  fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV", "*.csv"));
+  File dest = fc.showSaveDialog(stage);
+  if (dest != null) {
+    try (PrintWriter out = new PrintWriter(new FileWriter(dest))) {
+      out.println("Module,Page,Button,Action");
+      for (Map.Entry<String, List<LineRow>> entry : allModuleRows.entrySet()) {
+        String moduleLabel = entry.getKey();
+        for (LineRow row : entry.getValue()) {
+          boolean isPageHeader = row.getPage() != null && !row.getPage().isBlank();
+          String moduleCell = isPageHeader ? csv(moduleLabel) : "";
+          out.printf("%s,%s,%s,%s%n",
+              moduleCell,
+              csv(row.getPage()),
+              csv(row.getButton()),
+              csv(row.getAction()));
+        }
+      }
+    } catch (Exception ex) {
+      ex.printStackTrace();
+      setStatus("Full export failed: " + ex.getMessage());
+      return;
+    }
+    setStatus("Exported full module list to " + dest.getName());
+  }
+}
+
+  /** Write a CSV with header. If includeModule, first column is module label. */
+  private void writeCsv(File dest, List<LineRow> rows, boolean includeModule, String moduleLabel) {
+    try (PrintWriter out = new PrintWriter(new FileWriter(dest))) {
+      if (includeModule) out.println("Module,Page,Button,Action");
+      else out.println("Page,Button,Action");
+      for (LineRow r : rows) {
+        if (includeModule) {
+          out.printf("%s,%s,%s,%s%n",
+              csv(moduleLabel), csv(r.getPage()), csv(r.getButton()), csv(r.getAction()));
+        } else {
+          out.printf("%s,%s,%s%n",
+              csv(r.getPage()), csv(r.getButton()), csv(r.getAction()));
+        }
+      }
+    } catch (Exception ex) {
+      ex.printStackTrace();
+      setStatus("Export failed: " + ex.getMessage());
+    }
+  }
+
+  /** Minimal CSV quoting (wrap in quotes; escape quotes). */
+  private static String csv(String s) {
+    if (s == null) s = "";
+    return "\"" + s.replace("\"", "\"\"") + "\"";
+  }
+
+  // ===== Scanning logic (works for YAML & JSON dumps) =====
   @SuppressWarnings("unchecked")
   private static List<UsageRecord> scanUsage(Map<String, Object> root, Map<String, String> instanceLabels) {
     List<UsageRecord> out = new ArrayList<>();
@@ -434,7 +557,7 @@ public class CompanionModuleUsageFinder extends Application {
       if (!(pageEntry.getValue() instanceof Map)) continue;
       Map<String, Object> pageMap = (Map<String, Object>) pageEntry.getValue();
 
-      Object controlsObj = pageMap.get(KEY_CONTROLS);
+    Object controlsObj = pageMap.get(KEY_CONTROLS);
       if (!(controlsObj instanceof Map)) continue;
       Map<String, Object> groups = (Map<String, Object>) controlsObj;
 
@@ -487,7 +610,14 @@ public class CompanionModuleUsageFinder extends Application {
                       optString(action.get("action_id")),
                       optString(action.get("id"))
                   );
-                  out.add(new UsageRecord(targetInstanceId, pageNum, rowIndex + 1, colIndex + 1, stepIndex + 1, defId));
+                  out.add(new UsageRecord(
+                      targetInstanceId,
+                      pageNum,
+                      rowIndex + 1,
+                      colIndex + 1,
+                      stepIndex + 1,
+                      defId
+                  ));
                 }
               }
             }
@@ -506,6 +636,21 @@ public class CompanionModuleUsageFinder extends Application {
   private static int parseIntSafe(String s, int fallback) { try { return Integer.parseInt(s); } catch (Exception e) { return fallback; } }
   @SuppressWarnings("unchecked") private static Map<String, Object> asMap(Object o) { return (o instanceof Map) ? (Map<String, Object>) o : null; }
   private static String optString(Object o) { return (o == null) ? null : o.toString(); }
+
+  /** Sorts "row.col" numerically. */
+  private static class ButtonKeyComparator implements Comparator<String> {
+    @Override public int compare(String a, String b) {
+      int[] A = parse(a); int[] B = parse(b);
+      if (A[0] != B[0]) return Integer.compare(A[0], B[0]);
+      return Integer.compare(A[1], B[1]);
+    }
+    private int[] parse(String s) {
+      try {
+        String[] p = s.split("\\.");
+        return new int[]{ Integer.parseInt(p[0]), Integer.parseInt(p[1]) };
+      } catch (Exception e) { return new int[]{ Integer.MAX_VALUE, Integer.MAX_VALUE }; }
+    }
+  }
 
   public static void main(String[] args) { launch(args); }
 }
