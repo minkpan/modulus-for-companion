@@ -5,7 +5,7 @@
 
   <groupId>dev.modulus</groupId>
   <artifactId>modulus-for-companion</artifactId>
-  <version>0.0.3</version>
+  <version>0.0.5</version>
   <name>Modulus for Companion</name>
   <description>Scan Bitfocus Companion configs and list module usage</description>
   <packaging>jar</packaging>
