@@ -396,7 +396,6 @@ public class ModulusForCompanion extends Application {
       }
     }
 
-    // order identities: numeric-aware if they look like "row.col", else numeric for plain numbers
     Comparator<String> identCmp = (a, b) -> {
       if (a.contains(".") && b.contains(".")) {
         int[] A = parsePair(a); int[] B = parsePair(b);
@@ -407,7 +406,6 @@ public class ModulusForCompanion extends Application {
           return Integer.compare(Integer.parseInt(a), Integer.parseInt(b));
         } catch (Exception e) { return a.compareToIgnoreCase(b); }
       } else {
-        // keep numbers before dotted forms
         return a.contains(".") ? 1 : -1;
       }
     };
@@ -518,7 +516,7 @@ public class ModulusForCompanion extends Application {
 
   @SuppressWarnings("unchecked")
   private static List<UsageRecord> scanUsage(Map<String, Object> root, Map<String, String> instanceLabels) {
-    if (root.containsKey(KEY_PAGES) && root.get(KEY_PAGES) instanceof Map) {
+    if (root.containsKey(KEY_PAGES) && root.get(KEY_PAGES) instanceof Map || root.get(KEY_PAGES) instanceof List) {
       return scanUsageNew(root, instanceLabels);
     }
     if (root.containsKey("actions") && root.get("actions") instanceof Map) {
@@ -530,66 +528,166 @@ public class ModulusForCompanion extends Application {
   @SuppressWarnings("unchecked")
   private static List<UsageRecord> scanUsageNew(Map<String, Object> root, Map<String, String> instanceLabels) {
     List<UsageRecord> out = new ArrayList<>();
-    Map<String, Object> pages = (Map<String, Object>) root.get(KEY_PAGES);
-    for (Map.Entry<String, Object> pageEntry : pages.entrySet()) {
+
+    Object pagesObj = root.get(KEY_PAGES);
+    if (pagesObj == null) return out;
+
+    java.util.function.Function<Object, Map<String,Object>> asMap = o -> (o instanceof Map) ? (Map<String,Object>) o : null;
+    java.util.function.Function<Object, List<Object>> asList = o -> (o instanceof List) ? (List<Object>) o : null;
+
+    List<Map.Entry<String,Object>> pageEntries = new ArrayList<>();
+    if (pagesObj instanceof Map) {
+      for (Map.Entry<?,?> e : ((Map<?,?>) pagesObj).entrySet()) {
+        pageEntries.add(new AbstractMap.SimpleEntry<>(String.valueOf(e.getKey()), e.getValue()));
+      }
+    } else if (pagesObj instanceof List) {
+      List<Object> plist = (List<Object>) pagesObj;
+      for (int i = 0; i < plist.size(); i++) {
+        pageEntries.add(new AbstractMap.SimpleEntry<>(String.valueOf(i + 1), plist.get(i)));
+      }
+    } else {
+      return out;
+    }
+
+    for (Map.Entry<String,Object> pageEntry : pageEntries) {
       int pageNum = parseIntSafe(pageEntry.getKey(), -1);
-      if (!(pageEntry.getValue() instanceof Map)) continue;
-      Map<String, Object> pageMap = (Map<String, Object>) pageEntry.getValue();
+      Map<String,Object> pageMap = asMap.apply(pageEntry.getValue());
+      if (pageMap == null) continue;
+
       Object controlsObj = pageMap.get(KEY_CONTROLS);
-      if (!(controlsObj instanceof Map)) continue;
-      Map<String, Object> groups = (Map<String, Object>) controlsObj;
-      for (Map.Entry<String, Object> groupEntry : groups.entrySet()) {
-        int rowIndex = parseIntSafe(groupEntry.getKey(), -1);
-        if (!(groupEntry.getValue() instanceof Map)) continue;
-        Map<String, Object> controlMap = (Map<String, Object>) groupEntry.getValue();
-        for (Map.Entry<String, Object> controlEntry : controlMap.entrySet()) {
-          int colIndex = parseIntSafe(controlEntry.getKey(), -1);
-          if (!(controlEntry.getValue() instanceof Map)) continue;
-          Map<String, Object> control = (Map<String, Object>) controlEntry.getValue();
+      if (controlsObj == null) continue;
+
+      List<Map.Entry<String,Object>> rowEntries = new ArrayList<>();
+      if (controlsObj instanceof Map) {
+        for (Map.Entry<?,?> re : ((Map<?,?>) controlsObj).entrySet()) {
+          rowEntries.add(new AbstractMap.SimpleEntry<>(String.valueOf(re.getKey()), re.getValue()));
+        }
+      } else if (controlsObj instanceof List) {
+        List<Object> rows = (List<Object>) controlsObj;
+        for (int r = 0; r < rows.size(); r++) {
+          rowEntries.add(new AbstractMap.SimpleEntry<>(String.valueOf(r), rows.get(r))); // zero-based; +1 later
+        }
+      } else continue;
+
+      for (Map.Entry<String,Object> rowEntry : rowEntries) {
+        int rowIndex = parseIntSafe(rowEntry.getKey(), -1);
+        Map<String,Object> colsMap = asMap.apply(rowEntry.getValue());
+        List<Object> colsList = asList.apply(rowEntry.getValue());
+
+        List<Map.Entry<String,Object>> colEntries = new ArrayList<>();
+        if (colsMap != null) {
+          for (Map.Entry<?,?> ce : colsMap.entrySet()) {
+            colEntries.add(new AbstractMap.SimpleEntry<>(String.valueOf(ce.getKey()), ce.getValue()));
+          }
+        } else if (colsList != null) {
+          for (int c = 0; c < colsList.size(); c++) {
+            colEntries.add(new AbstractMap.SimpleEntry<>(String.valueOf(c), colsList.get(c)));
+          }
+        } else continue;
+
+        for (Map.Entry<String,Object> colEntry : colEntries) {
+          int colIndex = parseIntSafe(colEntry.getKey(), -1);
+          Map<String,Object> control = asMap.apply(colEntry.getValue());
+          if (control == null) continue;
+
           Object stepsObj = control.get(KEY_STEPS);
-          if (!(stepsObj instanceof Map)) continue;
-          Map<String, Object> stepsMap = (Map<String, Object>) stepsObj;
-          for (Map.Entry<String, Object> stepEntry : stepsMap.entrySet()) {
+          if (stepsObj == null) continue;
+
+          List<Map.Entry<String,Object>> stepEntries = new ArrayList<>();
+          if (stepsObj instanceof Map) {
+            for (Map.Entry<?,?> se : ((Map<?,?>) stepsObj).entrySet()) {
+              stepEntries.add(new AbstractMap.SimpleEntry<>(String.valueOf(se.getKey()), se.getValue()));
+            }
+          } else if (stepsObj instanceof List) {
+            List<Object> sList = (List<Object>) stepsObj;
+            for (int s = 0; s < sList.size(); s++) {
+              stepEntries.add(new AbstractMap.SimpleEntry<>(String.valueOf(s), sList.get(s)));
+            }
+          } else continue;
+
+          for (Map.Entry<String,Object> stepEntry : stepEntries) {
             int stepIndex = parseIntSafe(stepEntry.getKey(), -1);
-            if (!(stepEntry.getValue() instanceof Map)) continue;
-            Map<String, Object> stepMap = (Map<String, Object>) stepEntry.getValue();
+            Map<String,Object> stepMap = asMap.apply(stepEntry.getValue());
+            if (stepMap == null) continue;
+
+            List<List<Object>> actionLists = new ArrayList<>();
+
             Object actionSetsObj = stepMap.get(KEY_ACTION_SETS);
-            if (!(actionSetsObj instanceof Map)) continue;
-            Map<String, Object> actionSets = (Map<String, Object>) actionSetsObj;
-            for (Map.Entry<String, Object> asEntry : actionSets.entrySet()) {
-              Object listObj = asEntry.getValue();
-              if (!(listObj instanceof List)) continue;
-              List<Object> actions = (List<Object>) listObj;
-              for (Object actionObj : actions) {
-                if (!(actionObj instanceof Map)) continue;
-                Map<String, Object> action = (Map<String, Object>) actionObj;
-                if (!"action".equals(action.get(KEY_TYPE))) continue;
-                String connectionId = optString(action.get(KEY_CONNECTION_ID));
-                Map<String, Object> opts = asMap(action.get(KEY_OPTIONS));
-                String maybeInstance = (opts == null) ? null : optString(opts.get(KEY_INSTANCE_ID));
-                boolean direct = connectionId != null && instanceLabels.containsKey(connectionId);
-                boolean viaOpts = maybeInstance != null && instanceLabels.containsKey(maybeInstance);
-                String targetInstanceId = direct ? connectionId : (viaOpts ? maybeInstance : null);
-                if (targetInstanceId != null) {
-                  String defId = firstNonBlank(
-                      optString(action.get("definitionId")),
-                      optString(action.get("definition_id")),
-                      optString(action.get("actionId")),
-                      optString(action.get("action_id")),
-                      optString(action.get("id"))
-                  );
-                  String id = (rowIndex + 1) + "." + (colIndex + 1);
-                  out.add(new UsageRecord(
-                      targetInstanceId,
-                      pageNum,
-                      rowIndex + 1,
-                      colIndex + 1,
-                      stepIndex + 1,
-                      defId,
-                      id, // identity
-                      id  // display (row.col)
-                  ));
+            if (actionSetsObj instanceof Map) {
+              for (Object v : ((Map<?,?>) actionSetsObj).values()) {
+                List<Object> lst = asList.apply(v);
+                if (lst != null) actionLists.add(lst);
+              }
+            }
+
+            Object actionsDirect = stepMap.get("actions");
+            if (actionsDirect instanceof List) {
+              actionLists.add((List<Object>) actionsDirect);
+            } else if (actionsDirect instanceof Map) {
+              for (Object v : ((Map<?,?>) actionsDirect).values()) {
+                List<Object> lst = asList.apply(v);
+                if (lst != null) actionLists.add(lst);
+              }
+            }
+
+            if (actionLists.isEmpty()) {
+              for (Map.Entry<String,Object> se2 : stepMap.entrySet()) {
+                if (se2.getValue() instanceof List) {
+                  actionLists.add((List<Object>) se2.getValue());
                 }
+              }
+            }
+
+            if (actionLists.isEmpty()) continue;
+
+            for (List<Object> actions : actionLists) {
+              for (Object actionObj : actions) {
+                Map<String,Object> action = asMap.apply(actionObj);
+                if (action == null) continue;
+
+                String type = optString(action.get(KEY_TYPE));
+                if (type != null && !"action".equals(type)) {
+                  continue;
+                }
+
+                String connectionId = optString(action.get(KEY_CONNECTION_ID));
+                Map<String,Object> opts = asMap.apply(action.get(KEY_OPTIONS));
+                String maybeInstance = (opts == null) ? null : firstNonBlank(
+                    optString(opts.get(KEY_INSTANCE_ID)),
+                    optString(opts.get("instanceId")),
+                    optString(opts.get("connectionId"))
+                );
+                String directInstance = firstNonBlank(
+                    connectionId,
+                    optString(action.get("instance")),
+                    optString(action.get("instance_id"))
+                );
+
+                String targetInstanceId = firstNonBlank(directInstance, maybeInstance);
+                if (targetInstanceId == null || !instanceLabels.containsKey(targetInstanceId)) {
+                  continue;
+                }
+
+                String defId = firstNonBlank(
+                    optString(action.get("definitionId")),
+                    optString(action.get("definition_id")),
+                    optString(action.get("actionId")),
+                    optString(action.get("action_id")),
+                    optString(action.get("action")),
+                    optString(action.get("id"))
+                );
+
+                String id = (rowIndex + 1) + "." + (colIndex + 1);
+                out.add(new UsageRecord(
+                    targetInstanceId,
+                    pageNum,
+                    rowIndex + 1,
+                    colIndex + 1,
+                    stepIndex + 1,
+                    defId,
+                    id,
+                    id
+                ));
               }
             }
           }
@@ -619,7 +717,6 @@ public class ModulusForCompanion extends Application {
           int posIndex = parseIntSafe(be.getKey(), -1);
           if (posIndex < 1) continue;
 
-          // Value can be either a List of actions, or a Map with sublists (e.g., down/up)
           Object posVal = be.getValue();
           List<List<Object>> actionLists = new ArrayList<>();
 
@@ -658,17 +755,17 @@ public class ModulusForCompanion extends Application {
                   optString(act.get("id"))
               );
 
-              int step = stepBase + i + 1; // keep stable 1-based step order within all lists
+              int step = stepBase + i + 1;
 
-              String idStr = String.valueOf(posIndex); // legacy shows raw button number
+              String idStr = String.valueOf(posIndex);
               out.add(new UsageRecord(
                   instanceId,
                   pageNum,
                   -1, -1,
                   step,
                   defId,
-                  idStr,  // identity for grouping
-                  idStr   // display as raw number
+                  idStr,
+                  idStr
               ));
             }
             stepBase += Math.max(0, list.size());
