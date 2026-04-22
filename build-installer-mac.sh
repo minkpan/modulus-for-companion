@@ -77,7 +77,7 @@ hdiutil create \
   -volname "$APP_NAME" \
   -srcfolder "$DMG_STAGING" \
   -ov -format UDZO \
-  "$DIST/$APP_NAME.dmg"
+  "$DIST/Modulus-for-Companion-MacOS.dmg"
 
 echo ""
-echo "Done!  Distributable: $DIST/$APP_NAME.dmg"
+echo "Done!  Distributable: $DIST/Modulus-for-Companion-MacOS.dmg"
