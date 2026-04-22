@@ -6,8 +6,21 @@ Scan [Bitfocus Companion](https://bitfocus.io/companion) configuration files and
 
 Grab the latest release from the [Releases](../../releases) page — no Java installation required.
 
-- **macOS:** open the `.dmg`, drag the app to Applications, done.
-- **Windows:** run the `.exe` installer, follow the short wizard, find it in the Start menu.
+### macOS
+
+Open the `.dmg`, drag **Modulus for Companion** to your Applications folder, then eject the disk image.
+
+Because the app is not signed with an Apple Developer certificate, macOS will block it the first time. To open it:
+
+1. Right-click (or Control-click) the app in Applications
+2. Choose **Open**
+3. Click **Open** in the dialog that appears
+
+You only need to do this once. After that it opens normally.
+
+### Windows
+
+Run the `.exe` installer and follow the prompts. Windows may show a SmartScreen warning — click **More info** then **Run anyway**.
 
 ## Features
 
