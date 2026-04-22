@@ -10,13 +10,13 @@ Grab the latest release from the [Releases](../../releases) page — no Java ins
 
 Open the `.dmg`, drag **Modulus for Companion** to your Applications folder, then eject the disk image.
 
-Because the app is not signed with an Apple Developer certificate, macOS will block it the first time. To open it:
+Because the app is not signed with an Apple Developer certificate, you need to run this command in Terminal once before opening it for the first time:
 
-1. Right-click (or Control-click) the app in Applications
-2. Choose **Open**
-3. Click **Open** in the dialog that appears
+```
+xattr -dr com.apple.quarantine "/Applications/Modulus for Companion.app"
+```
 
-You only need to do this once. After that it opens normally.
+After that it opens normally — just double-click like any other app.
 
 ### Windows
 

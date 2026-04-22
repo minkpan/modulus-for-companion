@@ -62,25 +62,15 @@ jpackage \
   --icon "$DIR/src/main/resources/icons/app.icns" \
   --dest "$DIST"
 
-# 4. Sign with local Apple Development certificate so Gatekeeper allows right-click > Open.
-# Must sign inside-out: all dylibs and executables first, then the app bundle.
-# --deep misses nested binaries inside the bundled JRE, so we do it manually.
-echo "[4/5] Signing..."
-SIGN_ID="Apple Development: ori@junketproductions.com (6B22L2LHCY)"
-APP_BUNDLE="$DIST/$APP_NAME.app"
-ENTITLEMENTS="$DIR/entitlements.plist"
-
-# Sign all native libraries inside-out, then the bundle last.
-# The JVM requires the allow-jit entitlement on Apple Silicon.
-find "$APP_BUNDLE" -type f \( -name "*.dylib" -o -name "*.so" \) | while read -r f; do
-  codesign --sign "$SIGN_ID" --force --options runtime --entitlements "$ENTITLEMENTS" "$f" 2>/dev/null || true
+# 4. Strip all signatures jpackage applied.
+# A fully unsigned app can be cleared by the user with a one-time xattr command.
+# A partially or ad-hoc signed app gets hard-blocked with no recourse.
+echo "[4/5] Stripping signatures..."
+find "$DIST/$APP_NAME.app" -type f \( -name "*.dylib" -o -name "*.so" \) | while read -r f; do
+  codesign --remove-signature "$f" 2>/dev/null || true
 done
-find "$APP_BUNDLE/Contents/MacOS" -type f | while read -r f; do
-  codesign --sign "$SIGN_ID" --force --options runtime --entitlements "$ENTITLEMENTS" "$f" 2>/dev/null || true
-done
-
-# Sign the bundle itself last
-codesign --sign "$SIGN_ID" --force --options runtime --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
+codesign --remove-signature "$DIST/$APP_NAME.app/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+codesign --remove-signature "$DIST/$APP_NAME.app" 2>/dev/null || true
 
 # 5. Create DMG with an Applications shortcut for drag-and-drop install
 echo "[5/5] Creating DMG..."
