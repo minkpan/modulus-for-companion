@@ -6,10 +6,10 @@
 #     standard JDK (Temurin) also works using the JavaFX JARs built by mvn package.
 #   - Maven 3.9+ on PATH
 #
-# Output: target/dist/Modulus for Companion.dmg
+# Output: target/dist/Modulus-for-Companion-MacOS.dmg
 #
-# Note: the app is ad-hoc signed (no Apple Developer account required).
-# Users on macOS will need to right-click > Open the first time.
+# The app is intentionally left unsigned. On first launch macOS will block it;
+# users can right-click > Open to bypass this.
 
 set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,18 +23,18 @@ DIST="$DIR/target/dist"
 APP_NAME="Modulus for Companion"
 
 # 1. Build
-echo "[1/5] Building..."
+echo "[1/4] Building..."
 mvn -q package -f "$DIR/pom.xml"
 
 # 2. Prepare staging dir
-echo "[2/5] Preparing staging directory..."
+echo "[2/4] Preparing staging directory..."
 rm -rf "$APP" && mkdir -p "$APP"
 cp "$JAR" "$APP/"
 cp "$LIB"/jackson-*.jar "$APP/"
 cp "$LIB"/snakeyaml-*.jar "$APP/"
 
 # 3. Run jpackage to produce .app bundle
-echo "[3/5] Running jpackage..."
+echo "[3/4] Running jpackage..."
 rm -rf "$DIST" && mkdir -p "$DIST"
 
 if [ -n "$JAVAFX_HOME" ] && [ -d "$JAVAFX_HOME/lib" ]; then
@@ -62,12 +62,8 @@ jpackage \
   --icon "$DIR/src/main/resources/icons/app.icns" \
   --dest "$DIST"
 
-# 4. Ad-hoc sign the .app so Gatekeeper treats it as self-consistent
-echo "[4/5] Ad-hoc signing..."
-codesign --sign - --force --deep "$DIST/$APP_NAME.app"
-
-# 5. Create DMG with an Applications shortcut for drag-and-drop install
-echo "[5/5] Creating DMG..."
+# 4. Create DMG with an Applications shortcut for drag-and-drop install
+echo "[4/4] Creating DMG..."
 DMG_STAGING="$DIR/target/dmg-staging"
 rm -rf "$DMG_STAGING" && mkdir -p "$DMG_STAGING"
 cp -r "$DIST/$APP_NAME.app" "$DMG_STAGING/"
