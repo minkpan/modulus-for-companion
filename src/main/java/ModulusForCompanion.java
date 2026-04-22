@@ -117,7 +117,7 @@ public class ModulusForCompanion extends Application {
     fileMenu.getItems().addAll(openItem, new SeparatorMenuItem(), copyItem);
     menuBar.getMenus().add(fileMenu);
 
-    ToggleButton lightBtn = new ToggleButton("☀︎");
+    ToggleButton lightBtn = new ToggleButton("☀");
     ToggleButton darkBtn  = new ToggleButton("☾");
     ToggleGroup tg = new ToggleGroup();
     lightBtn.setToggleGroup(tg);
