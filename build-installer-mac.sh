@@ -23,18 +23,18 @@ DIST="$DIR/target/dist"
 APP_NAME="Modulus for Companion"
 
 # 1. Build
-echo "[1/4] Building..."
+echo "[1/5] Building..."
 mvn -q package -f "$DIR/pom.xml"
 
 # 2. Prepare staging dir
-echo "[2/4] Preparing staging directory..."
+echo "[2/5] Preparing staging directory..."
 rm -rf "$APP" && mkdir -p "$APP"
 cp "$JAR" "$APP/"
 cp "$LIB"/jackson-*.jar "$APP/"
 cp "$LIB"/snakeyaml-*.jar "$APP/"
 
 # 3. Run jpackage to produce .app bundle
-echo "[3/4] Running jpackage..."
+echo "[3/5] Running jpackage..."
 rm -rf "$DIST" && mkdir -p "$DIST"
 
 if [ -n "$JAVAFX_HOME" ] && [ -d "$JAVAFX_HOME/lib" ]; then
@@ -62,8 +62,28 @@ jpackage \
   --icon "$DIR/src/main/resources/icons/app.icns" \
   --dest "$DIST"
 
-# 4. Create DMG with an Applications shortcut for drag-and-drop install
-echo "[4/4] Creating DMG..."
+# 4. Sign with local Apple Development certificate so Gatekeeper allows right-click > Open.
+# Must sign inside-out: all dylibs and executables first, then the app bundle.
+# --deep misses nested binaries inside the bundled JRE, so we do it manually.
+echo "[4/5] Signing..."
+SIGN_ID="Apple Development: ori@junketproductions.com (6B22L2LHCY)"
+APP_BUNDLE="$DIST/$APP_NAME.app"
+ENTITLEMENTS="$DIR/entitlements.plist"
+
+# Sign all native libraries inside-out, then the bundle last.
+# The JVM requires the allow-jit entitlement on Apple Silicon.
+find "$APP_BUNDLE" -type f \( -name "*.dylib" -o -name "*.so" \) | while read -r f; do
+  codesign --sign "$SIGN_ID" --force --options runtime --entitlements "$ENTITLEMENTS" "$f" 2>/dev/null || true
+done
+find "$APP_BUNDLE/Contents/MacOS" -type f | while read -r f; do
+  codesign --sign "$SIGN_ID" --force --options runtime --entitlements "$ENTITLEMENTS" "$f" 2>/dev/null || true
+done
+
+# Sign the bundle itself last
+codesign --sign "$SIGN_ID" --force --options runtime --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
+
+# 5. Create DMG with an Applications shortcut for drag-and-drop install
+echo "[5/5] Creating DMG..."
 DMG_STAGING="$DIR/target/dmg-staging"
 rm -rf "$DMG_STAGING" && mkdir -p "$DMG_STAGING"
 cp -r "$DIST/$APP_NAME.app" "$DMG_STAGING/"
