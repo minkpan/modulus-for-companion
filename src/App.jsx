@@ -102,6 +102,7 @@ export default function App() {
 
       {/* Top bar */}
       <div className="top-bar">
+        <img src={`${import.meta.env.BASE_URL}favicon.png`} alt="" style={{ height: 24, width: 24, flexShrink: 0 }} />
         <button onClick={() => fileInputRef.current.click()}>Open File</button>
         <input ref={fileInputRef} type="file" accept=".companionconfig,*" style={{ display: 'none' }} onChange={handleFileInput} />
 
