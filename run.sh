@@ -14,9 +14,11 @@ if [ ! -f "$JAR" ]; then
 fi
 
 # Pick the right JavaFX platform JARs
-case "$(uname -s)" in
-  Darwin) PLATFORM="mac" ;;
-  *)      PLATFORM="linux" ;;
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) PLATFORM="mac-aarch64" ;;
+  Darwin-*)     PLATFORM="mac" ;;
+  *-aarch64)    PLATFORM="linux-aarch64" ;;
+  *)            PLATFORM="linux" ;;
 esac
 
 MODS="$LIB/javafx-controls-17.0.12-${PLATFORM}.jar:$LIB/javafx-graphics-17.0.12-${PLATFORM}.jar:$LIB/javafx-base-17.0.12-${PLATFORM}.jar"
