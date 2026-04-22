@@ -6,6 +6,9 @@ Scan [Bitfocus Companion](https://bitfocus.io/companion) configuration files and
 
 Grab the latest release from the [Releases](../../releases) page — no Java installation required.
 
+- **macOS:** open the `.dmg`, drag the app to Applications, done.
+- **Windows:** run the `.exe` installer, follow the short wizard, find it in the Start menu.
+
 ## Features
 
 - Drag-and-drop or file-picker to open a `.companionconfig`
