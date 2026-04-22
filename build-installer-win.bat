@@ -1,13 +1,12 @@
 @echo off
-:: Build the Windows app-image for Modulus for Companion.
+:: Build the Windows installer (.exe) for Modulus for Companion.
 ::
 :: Requires:
 ::   - Java 17+ with jpackage (JDK 14+) – set JAVA_HOME
 ::   - Maven 3.9+ on PATH
+::   - WiX Toolset 3.x on PATH (https://github.com/wixtoolset/wix3/releases)
 ::
-:: Output: target\dist\Modulus for Companion\   (copy this folder to distribute)
-:: For a real .exe/.msi installer, install WiX Toolset 3.x then change
-:: --type app-image  to  --type exe  (or msi) below.
+:: Output: target\dist\Modulus for Companion-0.0.5.exe
 
 setlocal
 
@@ -66,11 +65,13 @@ jpackage ^
   --module-path "%MODS%" ^
   --add-modules javafx.controls,javafx.graphics,javafx.base ^
   --icon "%DIR%src\main\resources\icons\app.ico" ^
-  --type app-image ^
+  --type exe ^
+  --win-menu ^
+  --win-shortcut ^
+  --win-dir-chooser ^
   --dest "%DIST%"
 
 if errorlevel 1 (echo jpackage failed. & exit /b 1)
 
 echo.
-echo Done!  Distributable: %DIST%\Modulus for Companion\
-echo Zip that folder and share it, or change --type to exe/msi with WiX installed.
+echo Done!  Installer: %DIST%\Modulus for Companion-%APP_VERSION%.exe
